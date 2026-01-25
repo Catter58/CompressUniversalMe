@@ -19,6 +19,7 @@
 #include <iostream>
 #include <algorithm>
 #include <charconv>
+#include <cstring>
 
 namespace compressum::cli {
 
