@@ -68,7 +68,6 @@ uint32_t CRC32::combine(uint32_t crc1, uint32_t crc2, size_t len2) {
     gf2_matrix_square(odd, even);
 
     // Apply len2 zeros to crc1
-    uint32_t* p;
     do {
         // Apply zeros operator for this bit of len2
         gf2_matrix_square(even, odd);

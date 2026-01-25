@@ -30,6 +30,17 @@
 #include <array>
 #include <cstring>
 #include <algorithm>
+#include <vector>
+
+// Cross-platform prefetch macro
+#if defined(_MSC_VER)
+    #include <intrin.h>
+    #define COMPRESSUM_PREFETCH(addr) _mm_prefetch(reinterpret_cast<const char*>(addr), _MM_HINT_T1)
+#elif defined(__GNUC__) || defined(__clang__)
+    #define COMPRESSUM_PREFETCH(addr) __builtin_prefetch(addr, 0, 1)
+#else
+    #define COMPRESSUM_PREFETCH(addr) ((void)0)
+#endif
 
 namespace compressum::dict {
 
@@ -141,7 +152,7 @@ public:
             // Prefetch next chain position data for reduced latency
             uint32_t next_chain_pos = prev_[chain_pos & (config_.window_size - 1)];
             if (next_chain_pos != NIL && next_chain_pos >= min_pos) {
-                __builtin_prefetch(data + next_chain_pos, 0, 1);  // Read, low temporal locality
+                COMPRESSUM_PREFETCH(data + next_chain_pos);  // Read, low temporal locality
             }
 
             // Skip if this is the current position (can't match against ourselves)
