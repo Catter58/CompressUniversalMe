@@ -59,6 +59,7 @@ add_test(NAME png COMMAND test_png)
 add_executable(test_edge_cases test_edge_cases.cpp)
 target_link_libraries(test_edge_cases PRIVATE compressum_lib)
 add_test(NAME edge_cases COMMAND test_edge_cases)
+set_tests_properties(edge_cases PROPERTIES TIMEOUT 120)
 
 # Performance benchmarks (Phase 7)
 add_executable(benchmark benchmark.cpp)

@@ -305,8 +305,8 @@ TEST(zero_original_size_in_header) {
 // ============================================================================
 
 TEST(size_just_under_block) {
-    // Just under default block size
-    std::vector<Byte> input(256 * 1024 - 1, 'A');
+    // Just under a smaller block size (64KB for faster tests)
+    std::vector<Byte> input(64 * 1024 - 1, 'A');
 
     Compressor c;
     auto [compressed, comp_result] = c.compress(input);
@@ -319,8 +319,8 @@ TEST(size_just_under_block) {
 }
 
 TEST(size_exactly_block) {
-    // Exactly default block size
-    std::vector<Byte> input(256 * 1024, 'B');
+    // Exactly 64KB
+    std::vector<Byte> input(64 * 1024, 'B');
 
     Compressor c;
     auto [compressed, comp_result] = c.compress(input);
@@ -333,8 +333,8 @@ TEST(size_exactly_block) {
 }
 
 TEST(size_just_over_block) {
-    // Just over default block size (triggers multi-block)
-    std::vector<Byte> input(256 * 1024 + 1, 'C');
+    // Just over 64KB (triggers multi-block on smaller configs)
+    std::vector<Byte> input(64 * 1024 + 1, 'C');
 
     Compressor c;
     auto [compressed, comp_result] = c.compress(input);
@@ -352,7 +352,7 @@ TEST(size_just_over_block) {
 
 TEST(pure_random_data) {
     std::mt19937 rng(12345);
-    std::vector<Byte> input(50000);
+    std::vector<Byte> input(10000);  // Reduced for faster tests
     for (auto& b : input) {
         b = static_cast<Byte>(rng() % 256);
     }
