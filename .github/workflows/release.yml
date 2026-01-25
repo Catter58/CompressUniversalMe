@@ -2,11 +2,71 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [ main ]
+    paths-ignore:
+      - '*.md'
+      - 'LICENSE'
+      - '.gitignore'
 
 jobs:
+  # First run tests to ensure code is valid
+  test:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            build_type: Release
+          - os: macos-latest
+            build_type: Release
+          - os: windows-latest
+            build_type: Release
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: brew install ninja
+
+    - name: Configure CMake (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          -DCOMPRESSUM_BUILD_TESTS=ON
+
+    - name: Configure CMake (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        cmake -B build `
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} `
+          -DCOMPRESSUM_BUILD_TESTS=ON
+
+    - name: Build (Unix)
+      if: runner.os != 'Windows'
+      run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+    - name: Build (Windows)
+      if: runner.os == 'Windows'
+      run: cmake --build build --config ${{ matrix.build_type }} -j
+
+    - name: Test (Unix)
+      if: runner.os != 'Windows'
+      run: cd build && ctest --output-on-failure
+
+    - name: Test (Windows)
+      if: runner.os == 'Windows'
+      run: cd build && ctest -C ${{ matrix.build_type }} --output-on-failure
+
+  # Build release binaries
   build-release:
+    needs: test
     strategy:
       matrix:
         include:
@@ -67,11 +127,26 @@ jobs:
         name: compressum-${{ matrix.name }}
         path: dist/
 
+  # Create GitHub release with all binaries
   create-release:
     needs: build-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Generate version
+      id: version
+      run: |
+        # Generate version from date and short commit hash
+        VERSION="v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Generated version: $VERSION"
+
     - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
@@ -83,14 +158,46 @@ jobs:
         for dir in */; do
           name="${dir%/}"
           cd "$name"
-          tar -czvf "../${name}.tar.gz" *
+          if [[ "$name" == *"windows"* ]]; then
+            zip "../${name}.zip" *
+          else
+            tar -czvf "../${name}.tar.gz" *
+          fi
           cd ..
         done
+        ls -la
 
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
-        files: artifacts/*.tar.gz
-        generate_release_notes: true
+        tag_name: ${{ steps.version.outputs.version }}
+        name: CompressUM ${{ steps.version.outputs.version }}
+        body: |
+          ## CompressUM Release ${{ steps.version.outputs.version }}
+
+          Automated release from main branch.
+
+          ### Downloads
+          - **Linux (x64)**: `compressum-linux-x64.tar.gz`
+          - **macOS (ARM64)**: `compressum-macos-arm64.tar.gz`
+          - **Windows (x64)**: `compressum-windows-x64.zip`
+
+          ### Usage
+          ```bash
+          # Compress
+          ./compressum compress input.txt -o output.cum
+
+          # Decompress
+          ./compressum decompress output.cum -o restored.txt
+
+          # Analyze
+          ./compressum analyze input.txt
+          ```
+        files: |
+          artifacts/compressum-linux-x64.tar.gz
+          artifacts/compressum-macos-arm64.tar.gz
+          artifacts/compressum-windows-x64.zip
+        draft: false
+        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
