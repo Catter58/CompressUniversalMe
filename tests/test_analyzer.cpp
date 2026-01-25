@@ -6,6 +6,7 @@
 #include <iostream>
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 using namespace compressum;
