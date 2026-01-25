@@ -270,7 +270,7 @@ int cmd_benchmark(const cli::Options& opts) {
 }
 
 int main(int argc, char* argv[]) {
-    cli::Parser parser("compressum", "CompressUM - Original Compression Algorithm");
+    cli::Parser parser("cum", "CompressUM - Hybrid Compression Tool");
 
     auto opts = parser.parse(argc, argv);
     if (!opts) {

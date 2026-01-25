@@ -72,13 +72,13 @@ jobs:
         include:
           - os: ubuntu-latest
             name: linux-x64
-            artifact: compressum
+            artifact: cum
           - os: macos-latest
             name: macos-arm64
-            artifact: compressum
+            artifact: cum
           - os: windows-latest
             name: windows-x64
-            artifact: compressum.exe
+            artifact: cum.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -124,7 +124,7 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: compressum-${{ matrix.name }}
+        name: cum-${{ matrix.name }}
         path: dist/
 
   # Create GitHub release with all binaries
@@ -178,25 +178,25 @@ jobs:
           Automated release from main branch.
 
           ### Downloads
-          - **Linux (x64)**: `compressum-linux-x64.tar.gz`
-          - **macOS (ARM64)**: `compressum-macos-arm64.tar.gz`
-          - **Windows (x64)**: `compressum-windows-x64.zip`
+          - **Linux (x64)**: `cum-linux-x64.tar.gz`
+          - **macOS (ARM64)**: `cum-macos-arm64.tar.gz`
+          - **Windows (x64)**: `cum-windows-x64.zip`
 
           ### Usage
           ```bash
           # Compress
-          ./compressum compress input.txt -o output.cum
+          ./cum compress input.txt -o output.cum
 
           # Decompress
-          ./compressum decompress output.cum -o restored.txt
+          ./cum decompress output.cum -o restored.txt
 
           # Analyze
-          ./compressum analyze input.txt
+          ./cum analyze input.txt
           ```
         files: |
-          artifacts/compressum-linux-x64.tar.gz
-          artifacts/compressum-macos-arm64.tar.gz
-          artifacts/compressum-windows-x64.zip
+          artifacts/cum-linux-x64.tar.gz
+          artifacts/cum-macos-arm64.tar.gz
+          artifacts/cum-windows-x64.zip
         draft: false
         prerelease: false
       env:

@@ -155,12 +155,12 @@ target_link_libraries(compressum_lib PUBLIC Threads::Threads)
 # ============================================================================
 # Executable Target
 # ============================================================================
-add_executable(compressum
+add_executable(cum
     src/main.cpp
     ${COMPRESSUM_CLI_SOURCES}
 )
 
-target_link_libraries(compressum PRIVATE compressum_lib)
+target_link_libraries(cum PRIVATE compressum_lib)
 
 # ============================================================================
 # Tests
@@ -173,7 +173,7 @@ endif()
 # ============================================================================
 # Installation
 # ============================================================================
-install(TARGETS compressum
+install(TARGETS cum
     RUNTIME DESTINATION bin
 )
 

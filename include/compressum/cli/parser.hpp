@@ -259,14 +259,29 @@ public:
                   << config::VERSION_MAJOR << "."
                   << config::VERSION_MINOR << "."
                   << config::VERSION_PATCH << "\n";
-        std::cout << "Original compression algorithm by CompressUM project\n";
-        std::cout << "Built with: ";
+        std::cout << "Hybrid compression (LZ77 + Huffman + rANS)\n";
+        std::cout << "https://github.com/Catter58/CompressUniversalMe\n\n";
+        std::cout << "SIMD: ";
+        bool has_simd = false;
         #if COMPRESSUM_USE_SSE42
             std::cout << "SSE4.2 ";
+            has_simd = true;
         #endif
         #if COMPRESSUM_USE_AVX2
             std::cout << "AVX2 ";
+            has_simd = true;
         #endif
+        #if COMPRESSUM_USE_NEON
+            std::cout << "NEON ";
+            has_simd = true;
+        #endif
+        #if COMPRESSUM_USE_ARM_CRC32
+            std::cout << "ARM-CRC32 ";
+            has_simd = true;
+        #endif
+        if (!has_simd) {
+            std::cout << "none";
+        }
         std::cout << "\n";
     }
 

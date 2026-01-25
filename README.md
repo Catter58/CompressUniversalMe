@@ -30,39 +30,39 @@ cmake --preset release
 cmake --build build/release -j$(nproc)
 
 # Run
-./build/release/compressum --help
+./build/release/cum --help
 ```
 
 ## Usage
 
 ### Compress a file
 ```bash
-./compressum compress input.txt -o output.cum
-./compressum compress input.txt                  # Creates input.txt.cum
+./cum compress input.txt -o output.cum
+./cum compress input.txt                  # Creates input.txt.cum
 ```
 
 ### Decompress a file
 ```bash
-./compressum decompress output.cum -o restored.txt
-./compressum decompress output.cum               # Creates output (removes .cum extension)
+./cum decompress output.cum -o restored.txt
+./cum decompress output.cum               # Creates output (removes .cum extension)
 ```
 
 ### Analyze a file
 ```bash
-./compressum analyze input.txt
+./cum analyze input.txt
 ```
 
 ### Compression levels
 ```bash
-./compressum compress input.txt -l fast    # Fast compression (highest speed)
-./compressum compress input.txt -l normal  # Balanced (default)
-./compressum compress input.txt -l best    # Best compression (smallest size)
+./cum compress input.txt -l fast    # Fast compression (highest speed)
+./cum compress input.txt -l normal  # Balanced (default)
+./cum compress input.txt -l best    # Best compression (smallest size)
 ```
 
 ### Multi-threaded compression
 ```bash
-./compressum compress largefile.bin -t 4   # Use 4 threads
-./compressum compress largefile.bin -t 0   # Auto-detect thread count
+./cum compress largefile.bin -t 4   # Use 4 threads
+./cum compress largefile.bin -t 0   # Auto-detect thread count
 ```
 
 ## Build Presets
