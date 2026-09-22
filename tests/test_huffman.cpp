@@ -206,7 +206,6 @@ TEST(length_serialization) {
     decoder.read_lengths(reader, 256);
 
     // Verify round-trip
-    const auto& orig_lengths = encoder.get_lengths();
     std::vector<Byte> test_data = {'A', 'B', 'C', 'D', 'E'};
 
     BitWriter enc_writer;

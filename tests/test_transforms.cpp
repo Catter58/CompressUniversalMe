@@ -1,5 +1,5 @@
 /**
- * CompressUM - Transform Tests (Delta, BWT, BCJ)
+ * CompressUM - Transform Tests (Delta, BCJ, legacy BWT decoders)
  */
 
 #include "compressum/transform/delta.hpp"
@@ -106,84 +106,30 @@ TEST(delta_random_data) {
 }
 
 // ============================================================================
-// BWT Tests
+// Legacy BWT / MTF / ZLE decoder tests (known vectors)
 // ============================================================================
 
-TEST(bwt_simple) {
+TEST(bwt_inverse_banana) {
+    // Sorted rotations of "banana": abanan anaban ananab banana nabana nanaba
+    const char* last_column = "nnbaaa";
+    std::vector<Byte> bwt_data(last_column, last_column + 6);
+
+    BWT bwt;
+    auto decoded = bwt.inverse(bwt_data, 3);
+
     const char* text = "banana";
-    std::vector<Byte> original(text, text + strlen(text));
-
-    BWT bwt;
-    auto result = bwt.transform(original);
-    auto decoded = bwt.inverse(result.data, result.primary_index);
-
-    assert(decoded == original);
+    assert(decoded == std::vector<Byte>(text, text + 6));
 }
 
-TEST(bwt_repeated) {
-    std::vector<Byte> original(100, 'A');
-
-    BWT bwt;
-    auto result = bwt.transform(original);
-    auto decoded = bwt.inverse(result.data, result.primary_index);
-
-    assert(decoded == original);
-}
-
-TEST(bwt_longer_text) {
-    const char* text = "the quick brown fox jumps over the lazy dog";
-    std::vector<Byte> original(text, text + strlen(text));
-
-    BWT bwt;
-    auto result = bwt.transform(original);
-    auto decoded = bwt.inverse(result.data, result.primary_index);
-
-    assert(decoded == original);
-}
-
-TEST(mtf_simple) {
-    std::vector<Byte> original = {'a', 'b', 'a', 'b', 'a', 'c'};
+TEST(mtf_inverse_banana) {
+    // MTF of "banana" starting from identity list
+    std::vector<Byte> encoded = {98, 98, 110, 1, 1, 1};
 
     MTF mtf;
-    auto encoded = mtf.transform(original);
     auto decoded = mtf.inverse(encoded);
 
-    assert(decoded == original);
-}
-
-TEST(mtf_repeated) {
-    // Repeated characters should produce runs of zeros
-    std::vector<Byte> original = {'a', 'a', 'a', 'a', 'a'};
-
-    MTF mtf;
-    auto encoded = mtf.transform(original);
-
-    // First is position of 'a', rest should be 0
-    assert(encoded[0] == 'a');  // Position of 'a' in initial list
-    for (size_t i = 1; i < encoded.size(); ++i) {
-        assert(encoded[i] == 0);
-    }
-
-    auto decoded = mtf.inverse(encoded);
-    assert(decoded == original);
-}
-
-TEST(bwt_mtf_combined) {
-    const char* text = "mississippi";
-    std::vector<Byte> original(text, text + strlen(text));
-
-    BWT bwt;
-    MTF mtf;
-
-    // Forward: BWT then MTF
-    auto bwt_result = bwt.transform(original);
-    auto mtf_encoded = mtf.transform(bwt_result.data);
-
-    // Inverse: MTF then BWT
-    auto mtf_decoded = mtf.inverse(mtf_encoded);
-    auto decoded = bwt.inverse(mtf_decoded, bwt_result.primary_index);
-
-    assert(decoded == original);
+    const char* text = "banana";
+    assert(decoded == std::vector<Byte>(text, text + 6));
 }
 
 // ============================================================================
@@ -246,31 +192,17 @@ TEST(bcj_auto_detect) {
 }
 
 // ============================================================================
-// ZLE Tests
+// ZLE decoder test
 // ============================================================================
 
-TEST(zle_roundtrip) {
-    // Data with runs of zeros (typical MTF output)
-    std::vector<Byte> original = {5, 0, 0, 0, 3, 0, 0, 0, 0, 0, 2};
+TEST(zle_decode_runs) {
+    // RUNA(0) at weight 1 + RUNB(1) at weight 2 = 1 + 4 = 5 zeros; 3 -> byte 2
+    std::vector<Byte> encoded = {0, 1, 3};
 
     ZLE zle;
-    auto encoded = zle.encode(original);
     auto decoded = zle.decode(encoded);
 
-    assert(decoded == original);
-}
-
-TEST(zle_all_zeros) {
-    std::vector<Byte> original(100, 0);
-
-    ZLE zle;
-    auto encoded = zle.encode(original);
-
-    // Should compress significantly
-    assert(encoded.size() < original.size() / 2);
-
-    auto decoded = zle.decode(encoded);
-    assert(decoded == original);
+    assert((decoded == std::vector<Byte>{0, 0, 0, 0, 0, 2}));
 }
 
 int main() {
@@ -284,13 +216,9 @@ int main() {
     RUN_TEST(delta_multichannel);
     RUN_TEST(delta_random_data);
 
-    // BWT tests
-    RUN_TEST(bwt_simple);
-    RUN_TEST(bwt_repeated);
-    RUN_TEST(bwt_longer_text);
-    RUN_TEST(mtf_simple);
-    RUN_TEST(mtf_repeated);
-    RUN_TEST(bwt_mtf_combined);
+    // Legacy decoder tests
+    RUN_TEST(bwt_inverse_banana);
+    RUN_TEST(mtf_inverse_banana);
 
     // BCJ tests
     RUN_TEST(bcj_x86_roundtrip);
@@ -298,9 +226,7 @@ int main() {
     RUN_TEST(bcj_arm64_roundtrip);
     RUN_TEST(bcj_auto_detect);
 
-    // ZLE tests
-    RUN_TEST(zle_roundtrip);
-    RUN_TEST(zle_all_zeros);
+    RUN_TEST(zle_decode_runs);
 
     std::cout << "\nAll tests passed!\n";
     return 0;

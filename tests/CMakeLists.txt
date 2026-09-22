@@ -25,6 +25,10 @@ add_executable(test_rans test_rans.cpp)
 target_link_libraries(test_rans PRIVATE compressum_lib)
 add_test(NAME rans COMMAND test_rans)
 
+add_executable(test_cm test_cm.cpp)
+target_link_libraries(test_cm PRIVATE compressum_lib)
+add_test(NAME cm COMMAND test_cm)
+
 # Dictionary compression tests
 add_executable(test_lz77 test_lz77.cpp)
 target_link_libraries(test_lz77 PRIVATE compressum_lib)

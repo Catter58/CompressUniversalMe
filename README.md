@@ -8,7 +8,7 @@ A cross-platform CLI compression tool featuring an original hybrid compression a
 - **Automatic Data Analysis** - Detects data type and selects optimal compression strategy
 - **All Components From Scratch** - No external compression libraries (zlib, lz4, zstd, etc.)
 - **High Performance** - SIMD optimizations (AVX2, SSE4.2, ARM NEON)
-- **Multi-threaded** - Parallel block compression for large files
+- **Multi-threaded** - Parallel block compression and decompression for large files
 - **Cross-platform** - Linux, macOS (Intel/Apple Silicon), Windows
 - **Single Binary** - No runtime dependencies
 
@@ -54,9 +54,9 @@ cmake --build build/release -j$(nproc)
 
 ### Compression levels
 ```bash
-./cum compress input.txt -l fast    # Fast compression (highest speed)
-./cum compress input.txt -l normal  # Balanced (default)
-./cum compress input.txt -l best    # Best compression (smallest size)
+./cum compress input.txt -l 1       # Fast compression (highest speed)
+./cum compress input.txt -l 5       # Balanced (default)
+./cum compress input.txt -l 9       # Best compression (smallest size)
 ```
 
 ### Multi-threaded compression
@@ -100,7 +100,6 @@ Input Data
 ┌─────────────────────────────────────┐
 │  Phase 2: Preprocessing             │
 │  • Delta encoding (sequential data) │
-│  • BWT (text with high entropy)     │
 │  • BCJ filter (executables)         │
 └─────────────────────────────────────┘
     │
@@ -130,33 +129,60 @@ Input Data
 Compressed Output (.cum)
 ```
 
+### Level 9: context mixing (`entropy/cm.hpp`)
+
+Levels 7-9 replace the LZ77 stage with an original bitwise context-mixing coder:
+
+- 11 context models predict each bit: orders 0-4 and 6, current word, word pair,
+  sparse contexts (bytes -2/-3, -2/-4, -4/-8) for tables and binary records
+- A match model predicts the next bit from the longest earlier repeat
+- Counters live in 64-byte, 2-way associative buckets with check tags,
+  one bucket per context nibble
+- Two logistic mixers with different weight selectors are averaged, then
+  three SSE stages (order 0, 1, 2) refine the probability
+- A 32-bit binary arithmetic coder writes the bits
+
 ## File Format (.cum)
 
 ```
 Header (32 bytes):
 ┌──────────────────────────────────────┐
 │ Magic: "CUM\x01"        (4 bytes)    │
-│ Version                 (2 bytes)    │
+│ Version (1, or 2 if CM) (2 bytes)    │
 │ Flags                   (2 bytes)    │
 │ Original size           (8 bytes)    │
 │ Compressed size         (8 bytes)    │
 │ CRC32                   (4 bytes)    │
 │ Block count             (4 bytes)    │
 └──────────────────────────────────────┘
-Block Table + Compressed Blocks...
+Then per block: 8-byte header (24-bit compressed size, 24-bit original size,
+preprocessor flags, method) followed by the block data
 ```
 
 ## Performance
 
-Benchmarks on Apple M1 (ARM64):
+Compressed size in bytes, Apple Silicon (ARM64), 2026-09-22. Lower is better.
+Every `cum` result was verified to decompress byte-identical.
 
-| Data Type | Compression Ratio | Compress Speed | Decompress Speed |
-|-----------|-------------------|----------------|------------------|
-| Text (English) | 2.75x | 335 MB/s | 183 MB/s |
-| Binary (Structured) | 4.82x | 679 MB/s | 461 MB/s |
-| Random | 1.00x | 1947 MB/s | 3813 MB/s |
+| File | Original | cum -l 5 | **cum -l 9** | gzip -9 | bzip2 -9 | xz -9e | zstd --ultra -22 | brotli -q 11 |
+|------|---------:|---------:|------------:|--------:|---------:|-------:|-----------------:|-------------:|
+| English word list | 2,493,885 | 838,270 | **410,195** | 754,299 | 857,578 | 637,488 | 661,859 | 649,944 |
+| C/C++ headers | 8,000,000 | 1,425,988 | **670,078** | 1,274,843 | 1,020,259 | 878,776 | 918,568 | 878,215 |
+| JSON log | 5,287,794 | 834,286 | **311,077** | 650,967 | 472,821 | 508,072 | 554,949 | 535,722 |
+| Mach-O executable | 2,045,440 | 1,032,610 | **553,899** | 984,073 | 878,088 | 566,524 | 620,036 | 582,288 |
+| 16-bit sensor samples | 2,000,000 | 837,400 | **366,517** | 819,713 | 390,907 | 541,800 | 649,736 | 598,623 |
+| JPEG photo | 3,398,183 | 3,398,319 | **3,145,002** | 3,326,381 | 3,245,144 | 3,280,180 | 3,279,760 | - |
 
-CRC32-C throughput: 7.8 GB/s (ARM hardware acceleration)
+Level 9 (context mixing) runs at about 1-1.5 MB/s in both directions per thread;
+blocks compress and decompress in parallel (29 MB file: 24 s on 1 thread, 8 s on 4)
+and uses about 180 MB per 8 MB block (up to 4 blocks in parallel).
+Levels 1-6 (LZ77 + Huffman) run at 100+ MB/s.
+
+Reproduce on your own files:
+
+```bash
+CUM=build/release/cum scripts/bench.sh file1 file2 ...
+```
 
 ## Core Components
 
@@ -165,9 +191,10 @@ CRC32-C throughput: 7.8 GB/s (ARM hardware acceleration)
 | BitStream | `core/bitstream.hpp` | Bit-level I/O with buffering |
 | CRC32-C | `core/crc32.hpp` | Hardware-accelerated checksum |
 | Huffman | `entropy/huffman.hpp` | Canonical Huffman codes |
+| Context mixing | `entropy/cm.hpp` | Level 9 bitwise CM coder (see below) |
 | rANS | `entropy/rans.hpp` | Asymmetric Numeral Systems |
 | LZ77 | `dictionary/lz77.hpp` | Hash chains, lazy matching |
-| BWT | `transform/bwt.hpp` | Burrows-Wheeler Transform |
+| Legacy BWT | `transform/bwt.hpp` | Decoders for old v1 BWT blocks only |
 | Delta | `transform/delta.hpp` | Delta encoding |
 | BCJ | `transform/bcj.hpp` | Executable preprocessing |
 | Deflate | `transform/deflate.hpp` | zlib-compatible inflate/deflate |

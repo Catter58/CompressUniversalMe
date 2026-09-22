@@ -21,7 +21,8 @@ inline constexpr uint16_t VERSION_PATCH = 0;
 // File Format
 // ============================================================================
 inline constexpr uint8_t MAGIC[4] = {'C', 'U', 'M', 0x01};
-inline constexpr uint16_t FORMAT_VERSION = 1;
+inline constexpr uint16_t FORMAT_VERSION = 2;     // 2: may contain context-mixing blocks
+inline constexpr uint16_t FORMAT_VERSION_V1 = 1;  // written when no block needs v2
 
 // ============================================================================
 // Compression Parameters
@@ -31,6 +32,10 @@ inline constexpr uint16_t FORMAT_VERSION = 1;
 inline constexpr size_t MIN_BLOCK_SIZE = 4 * 1024;           // 4 KB
 inline constexpr size_t DEFAULT_BLOCK_SIZE = 256 * 1024;     // 256 KB
 inline constexpr size_t MAX_BLOCK_SIZE = 4 * 1024 * 1024;    // 4 MB
+inline constexpr size_t CM_BLOCK_SIZE = 8 * 1024 * 1024;     // 8 MB: CM model learns across the whole block
+// ponytail: CM model holds ~180 MB per block in flight, so at most 4 blocks run
+// at once (~750 MB). Make this follow the -M memory limit if that becomes needed
+inline constexpr size_t CM_MAX_THREADS = 4;
 
 // LZ77 parameters
 inline constexpr size_t LZ77_MIN_MATCH = 3;

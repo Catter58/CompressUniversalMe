@@ -84,9 +84,11 @@ int cmd_compress(const cli::Options& opts) {
 
     Compressor compressor(comp_opts);
 
+    int rc = 0;
     for (const auto& input_file : opts.input_files) {
         if (!fs::exists(input_file)) {
             std::cerr << "Error: File not found: " << input_file << "\n";
+            rc = 1;
             continue;
         }
 
@@ -100,6 +102,7 @@ int cmd_compress(const cli::Options& opts) {
         if (fs::exists(output_file) && !opts.force) {
             std::cerr << "Error: Output file exists: " << output_file
                       << " (use -f to overwrite)\n";
+            rc = 1;
             continue;
         }
 
@@ -113,6 +116,7 @@ int cmd_compress(const cli::Options& opts) {
 
         if (!result.ok()) {
             std::cerr << "Error: Compression failed: " << error_message(result.error) << "\n";
+            rc = 1;
             continue;
         }
 
@@ -121,7 +125,8 @@ int cmd_compress(const cli::Options& opts) {
             std::cout << "  Original:   " << result.original_size << " bytes\n";
             std::cout << "  Compressed: " << result.compressed_size << " bytes\n";
             std::cout << "  Ratio:      " << std::fixed << std::setprecision(2)
-                      << result.ratio << "x\n";
+                      << result.ratio
+                      << "x\n";
             std::cout << "  Speed:      " << std::fixed << std::setprecision(1)
                       << (result.original_size / 1024.0 / 1024.0 / duration)
                       << " MB/s\n";
@@ -133,7 +138,7 @@ int cmd_compress(const cli::Options& opts) {
         }
     }
 
-    return 0;
+    return rc;
 }
 
 /**
@@ -146,9 +151,11 @@ int cmd_decompress(const cli::Options& opts) {
 
     Decompressor decompressor(decomp_opts);
 
+    int rc = 0;
     for (const auto& input_file : opts.input_files) {
         if (!fs::exists(input_file)) {
             std::cerr << "Error: File not found: " << input_file << "\n";
+            rc = 1;
             continue;
         }
 
@@ -167,6 +174,7 @@ int cmd_decompress(const cli::Options& opts) {
         if (fs::exists(output_file) && !opts.force) {
             std::cerr << "Error: Output file exists: " << output_file
                       << " (use -f to overwrite)\n";
+            rc = 1;
             continue;
         }
 
@@ -180,6 +188,7 @@ int cmd_decompress(const cli::Options& opts) {
 
         if (!result.ok()) {
             std::cerr << "Error: Decompression failed: " << error_message(result.error) << "\n";
+            rc = 1;
             continue;
         }
 
@@ -200,7 +209,7 @@ int cmd_decompress(const cli::Options& opts) {
         }
     }
 
-    return 0;
+    return rc;
 }
 
 /**

@@ -390,6 +390,8 @@ private:
                     distance += reader.read_bits(DISTANCE_EXTRA[dist_symbol]);
                 }
 
+                if (distance == 0 || distance > output.size()) break;  // Corrupt stream
+
                 size_t start = output.size() - distance;
                 for (uint32_t j = 0; j < length; ++j) {
                     output.push_back(output[start + j]);

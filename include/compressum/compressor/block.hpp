@@ -6,9 +6,8 @@
  *
  * Handles compression of individual data blocks:
  * - Analyzes block data
- * - Selects optimal preprocessor (Delta/BWT/BCJ/None)
- * - Applies LZ77 compression
- * - Encodes with Huffman coding
+ * - Selects optimal preprocessor (Delta/BCJ/None)
+ * - Applies LZ77 + Huffman (levels 1-6) or context mixing (levels 7-9)
  */
 
 #include "../config.hpp"
@@ -18,6 +17,7 @@
 #include "../core/crc32.hpp"
 #include "../dictionary/lz77.hpp"
 #include "../entropy/huffman.hpp"
+#include "../entropy/cm.hpp"
 #include "../transform/delta.hpp"
 #include "../transform/bwt.hpp"
 #include "../transform/bcj.hpp"
@@ -35,8 +35,9 @@ enum class CompressionMethod : uint8_t {
     Store = 0,      // No compression (store raw)
     LZ77 = 1,       // LZ77 + Huffman
     LZ77_Delta = 2, // Delta + LZ77 + Huffman
-    LZ77_BWT = 3,   // BWT + MTF + LZ77 + Huffman
-    LZ77_BCJ = 4    // BCJ + LZ77 + Huffman
+    LZ77_BWT = 3,   // Legacy (format v1): BWT + MTF + LZ77 + Huffman, decode only
+    LZ77_BCJ = 4,   // BCJ + LZ77 + Huffman
+    CM = 5          // Context mixing + arithmetic coding (optionally after BCJ)
 };
 
 /**
@@ -89,28 +90,20 @@ public:
         // Apply preprocessing
         std::vector<Byte> preprocessed = apply_preprocessor(input, preprocessor);
 
-        // For media optimizers (JPEG/PNG), the "original" is the preprocessed data
-        // because decode() is a passthrough - optimization is not reversible
-        bool is_media_optimizer = has_flag(preprocessor, Preprocessor::JPEG) ||
-                                  has_flag(preprocessor, Preprocessor::PNG);
-        if (is_media_optimizer) {
-            result.original_size = static_cast<uint32_t>(preprocessed.size());
-        } else {
-            result.original_size = static_cast<uint32_t>(input.size());
-        }
+        result.original_size = static_cast<uint32_t>(input.size());
 
         // Compress
         std::vector<Byte> compressed;
         if (method == CompressionMethod::Store) {
             compressed = preprocessed;
+        } else if (method == CompressionMethod::CM) {
+            compressed = entropy::cm::encode(preprocessed);
         } else {
             compressed = compress_lz77_huffman(preprocessed);
         }
 
-        // Check if compression is beneficial
-        // For JPEG/PNG, always keep the optimized data (they are lossless but may not reduce size)
-        // Add overhead for header (8 bytes per block)
-        if (!is_media_optimizer && compressed.size() + 8 >= input.size()) {
+        // Check if compression is beneficial (8 bytes block header overhead)
+        if (compressed.size() + 8 >= input.size()) {
             // Store raw - compression not beneficial
             result.data.assign(input.begin(), input.end());
             result.compressed_size = static_cast<uint32_t>(input.size());
@@ -138,22 +131,21 @@ private:
      */
     void configure_for_level(Level level) {
         lz_config_.level = level;
+        use_cm_ = false;
 
         switch (level) {
             case Level::Fast:
                 lz_config_.max_chain = 4;
                 lz_config_.lazy_matching = false;
-                try_bwt_ = false;
                 break;
             case Level::Normal:
                 lz_config_.max_chain = 32;
                 lz_config_.lazy_matching = true;
-                try_bwt_ = false;
                 break;
             case Level::Best:
                 lz_config_.max_chain = 128;
                 lz_config_.lazy_matching = true;
-                try_bwt_ = true;
+                use_cm_ = true;
                 break;
         }
     }
@@ -163,21 +155,23 @@ private:
      */
     [[nodiscard]] std::pair<Preprocessor, CompressionMethod>
     select_strategy(ByteSpan input, const DataStats& stats) {
+        // Best level: context mixing models the data directly, even media and
+        // high-entropy data (JPEG shrinks ~7%); compress() stores the block raw
+        // if CM does not help. No BCJ: it made ARM64/universal binaries larger
+        if (use_cm_) {
+            return {Preprocessor::None, CompressionMethod::CM};
+        }
+
         // Already compressed data - store without compression
         if (stats.type == DataType::Compressed) {
             return {Preprocessor::None, CompressionMethod::Store};
         }
 
-        // Media files - apply format-specific optimization
+        // Media files (JPEG/PNG) are already entropy-coded. The JPEG/PNG
+        // "optimizers" rewrite bytes irreversibly, which breaks lossless
+        // round-trip, so they are never selected; decoder keeps them for old files.
         if (stats.type == DataType::Media) {
-            switch (stats.media_format) {
-                case MediaFormat::JPEG:
-                    return {Preprocessor::JPEG, CompressionMethod::Store};
-                case MediaFormat::PNG:
-                    return {Preprocessor::PNG, CompressionMethod::Store};
-                default:
-                    return {Preprocessor::None, CompressionMethod::Store};
-            }
+            return {Preprocessor::None, CompressionMethod::Store};
         }
 
         // Very high entropy - unlikely to compress well
@@ -188,11 +182,6 @@ private:
         // Executable files benefit from BCJ filter
         if (stats.type == DataType::Executable) {
             return {Preprocessor::BCJ, CompressionMethod::LZ77_BCJ};
-        }
-
-        // Text with high entropy may benefit from BWT (if Best mode)
-        if (try_bwt_ && stats.type == DataType::Text && stats.entropy > 5.0) {
-            return {Preprocessor::BWT | Preprocessor::RLE, CompressionMethod::LZ77_BWT};
         }
 
         // Check for sequential/correlated data (delta encoding beneficial)
@@ -260,29 +249,6 @@ private:
         if (has_flag(prep, Preprocessor::Delta)) {
             transform::DeltaEncoder delta;
             result = delta.encode(result);
-        }
-
-        if (has_flag(prep, Preprocessor::BWT)) {
-            transform::BWT bwt;
-            auto bwt_result = bwt.transform(result);
-
-            // Prepend primary index (4 bytes, little-endian)
-            std::vector<Byte> with_index;
-            with_index.reserve(bwt_result.data.size() + 4);
-            write_uint32_le(with_index, bwt_result.primary_index);
-            with_index.insert(with_index.end(),
-                             bwt_result.data.begin(), bwt_result.data.end());
-
-            result = std::move(with_index);
-
-            // Apply MTF after BWT
-            transform::MTF mtf;
-            result = mtf.transform(result);
-        }
-
-        if (has_flag(prep, Preprocessor::RLE)) {
-            transform::ZLE zle;
-            result = zle.encode(result);
         }
 
         return result;
@@ -362,19 +328,9 @@ private:
         return writer.take_data();
     }
 
-    /**
-     * Write uint32 little-endian
-     */
-    static void write_uint32_le(std::vector<Byte>& out, uint32_t value) {
-        out.push_back(static_cast<Byte>(value & 0xFF));
-        out.push_back(static_cast<Byte>((value >> 8) & 0xFF));
-        out.push_back(static_cast<Byte>((value >> 16) & 0xFF));
-        out.push_back(static_cast<Byte>((value >> 24) & 0xFF));
-    }
-
     Level level_;
     dict::LZ77Config lz_config_;
-    bool try_bwt_ = false;
+    bool use_cm_ = false;
 };
 
 /**
@@ -407,6 +363,8 @@ public:
         // Decompress
         if (method == CompressionMethod::Store) {
             result.assign(input.begin(), input.end());
+        } else if (method == CompressionMethod::CM) {
+            result = entropy::cm::decode(input, original_size);
         } else {
             result = decompress_lz77_huffman(input, original_size);
         }
@@ -456,6 +414,12 @@ private:
                 uint8_t dist_low = reader.read_byte();
                 uint16_t distance = (dist_high << 8) | dist_low;
 
+                // Corrupt stream: distance outside produced data. Stop here;
+                // the size check in the caller reports CorruptedData
+                if (distance == 0 || distance > output.size()) {
+                    break;
+                }
+
                 // Copy from earlier in output
                 size_t copy_pos = output.size() - distance;
                 for (uint16_t j = 0; j < length && output.size() < original_size; ++j) {
@@ -497,7 +461,7 @@ private:
         }
 
         if (has_flag(prep, Preprocessor::BWT)) {
-            // Reverse MTF first
+            // Legacy format v1 blocks only: reverse MTF first
             transform::MTF mtf;
             result = mtf.inverse(result);
 

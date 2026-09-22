@@ -73,7 +73,7 @@ TEST(repeated_text) {
     assert(comp_result.ok());
     // Should compress significantly
     assert(comp_result.compressed_size < input.size() / 2);
-    assert(comp_result.ratio > 0.5);
+    assert(comp_result.ratio > 2.0);
 
     Decompressor d;
     auto [decompressed, decomp_result] = d.decompress(compressed);
@@ -599,6 +599,39 @@ TEST(media_png_detection) {
     assert(stats.media_format == MediaFormat::PNG);
 }
 
+// Regression: Level::Best used to route high-entropy text through BWT,
+// whose forward/inverse mismatch corrupted repeated suffixes
+TEST(level_best_high_entropy_text) {
+    const std::string alphabet =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789(){};,.=+-*/";
+    std::vector<std::string> words;
+    uint32_t seed = 12345;
+    auto next = [&seed] { seed = seed * 1103515245u + 12345u; return seed >> 16; };
+    for (int w = 0; w < 400; ++w) {
+        std::string word;
+        size_t len = 2 + next() % 8;
+        for (size_t k = 0; k < len; ++k) word += alphabet[next() % alphabet.size()];
+        words.push_back(word);
+    }
+    std::vector<Byte> data;
+    while (data.size() < 300000) {
+        const auto& word = words[next() % words.size()];
+        data.insert(data.end(), word.begin(), word.end());
+        data.push_back(next() % 12 == 0 ? '\n' : ' ');
+    }
+
+    CompressOptions options;
+    options.level = Level::Best;
+    Compressor c(options);
+    auto [compressed, comp_result] = c.compress(data);
+    assert(comp_result.ok());
+
+    Decompressor d;
+    auto [decompressed, decomp_result] = d.decompress(compressed);
+    assert(decomp_result.ok());
+    assert(decompressed == data);
+}
+
 TEST(media_jpeg_roundtrip) {
     auto jpeg = create_minimal_jpeg();
 
@@ -611,10 +644,8 @@ TEST(media_jpeg_roundtrip) {
     auto [decompressed, decomp_result] = d.decompress(compressed);
 
     assert(decomp_result.ok());
-    // JPEG optimizer should preserve data
-    assert(decompressed.size() >= 10);
-    // Check JPEG signature
-    assert(decompressed[0] == 0xFF && decompressed[1] == 0xD8);
+    // Lossless: bytes must be identical
+    assert(decompressed == jpeg);
 }
 
 TEST(media_png_roundtrip) {
@@ -629,10 +660,8 @@ TEST(media_png_roundtrip) {
     auto [decompressed, decomp_result] = d.decompress(compressed);
 
     assert(decomp_result.ok());
-    // PNG optimizer should preserve data
-    assert(decompressed.size() >= 8);
-    // Check PNG signature
-    assert(decompressed[0] == 0x89 && decompressed[1] == 0x50);
+    // Lossless: bytes must be identical
+    assert(decompressed == png);
 }
 
 // ============================================================================
@@ -654,6 +683,7 @@ int main() {
     RUN_TEST(level_fast);
     RUN_TEST(level_normal);
     RUN_TEST(level_best);
+    RUN_TEST(level_best_high_entropy_text);
 
     // Block size tests
     RUN_TEST(small_block_size);

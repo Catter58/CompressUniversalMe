@@ -4,10 +4,12 @@
  */
 
 #include "compressum/compressum.hpp"
+#include <algorithm>
 #include <fstream>
 #include <chrono>
 #include <thread>
 #include <future>
+#include <atomic>
 
 namespace compressum {
 
@@ -102,6 +104,9 @@ Compressor::compress(ByteSpan input) {
 
     // Determine block size
     size_t block_size = options_.block_size;
+    if (options_.level == Level::Best && block_size == config::DEFAULT_BLOCK_SIZE) {
+        block_size = config::CM_BLOCK_SIZE;
+    }
 
     // Calculate number of blocks
     size_t num_blocks = (input.size() + block_size - 1) / block_size;
@@ -111,6 +116,9 @@ Compressor::compress(ByteSpan input) {
     size_t num_threads = options_.threads;
     if (num_threads == 0) {
         num_threads = default_thread_count();
+    }
+    if (options_.level == Level::Best) {
+        num_threads = std::min(num_threads, config::CM_MAX_THREADS);
     }
 
     if (num_threads > 1 && num_blocks > 1) {
@@ -148,40 +156,12 @@ Compressor::compress(ByteSpan input) {
         }
     }
 
-    // Calculate total sizes and CRC
-    // For media optimizers (JPEG/PNG), the block original_size is the preprocessed size,
-    // so we need to sum block original_sizes to get the true output size
+    // Calculate total size and CRC of the original input
     size_t total_compressed = sizeof(FileHeader);
-    size_t total_original = 0;
     for (const auto& block : compressed_blocks) {
         total_compressed += sizeof(BlockHeader) + block.data.size();
-        total_original += block.original_size;
     }
-
-    // Calculate CRC on what will be the reconstructed output
-    // For blocks with media optimizers, this is the optimized data (block.data)
-    // For normal blocks, this is the original input
-    std::vector<Byte> logical_output;
-    logical_output.reserve(total_original);
-    size_t input_offset = 0;
-    for (const auto& block : compressed_blocks) {
-        bool is_media = has_flag(block.preprocessor, Preprocessor::JPEG) ||
-                        has_flag(block.preprocessor, Preprocessor::PNG);
-        if (is_media) {
-            // For media blocks, the "original" is the optimized data
-            logical_output.insert(logical_output.end(), block.data.begin(), block.data.end());
-        } else {
-            // For normal blocks, the "original" is the input
-            size_t block_len = block.original_size;
-            logical_output.insert(logical_output.end(),
-                                  input.data() + input_offset,
-                                  input.data() + input_offset + block_len);
-        }
-        // Move input offset by the actual input block size
-        size_t input_block_len = std::min(options_.block_size, input.size() - input_offset);
-        input_offset += input_block_len;
-    }
-    result.crc32 = core::crc32c(logical_output);
+    result.crc32 = core::crc32c(input);
 
     // Build output
     std::vector<Byte> output;
@@ -193,9 +173,12 @@ Compressor::compress(ByteSpan input) {
     header.magic[1] = 'U';
     header.magic[2] = 'M';
     header.magic[3] = 0x01;
-    header.version = config::FORMAT_VERSION;
+    // Files without CM blocks stay readable by format-v1 decoders
+    bool has_cm = std::any_of(compressed_blocks.begin(), compressed_blocks.end(),
+        [](const CompressedBlock& b) { return b.method == CompressionMethod::CM; });
+    header.version = has_cm ? config::FORMAT_VERSION : config::FORMAT_VERSION_V1;
     header.flags = static_cast<uint16_t>(options_.level);
-    header.original_size = total_original;
+    header.original_size = input.size();
     header.compressed_size = total_compressed - sizeof(FileHeader);
     header.crc32 = result.crc32;
     header.block_count = static_cast<uint32_t>(num_blocks);
@@ -218,8 +201,8 @@ Compressor::compress(ByteSpan input) {
 
     result.error = ErrorCode::Ok;
     result.compressed_size = output.size();
-    result.ratio = 1.0 - (static_cast<double>(result.compressed_size) /
-                         static_cast<double>(result.original_size));
+    result.ratio = static_cast<double>(result.original_size) /
+                   static_cast<double>(result.compressed_size);
     result.speed_mbps = elapsed > 0 ?
         (static_cast<double>(result.original_size) / (1024.0 * 1024.0)) / elapsed : 0;
 
@@ -333,15 +316,26 @@ Decompressor::decompress(ByteSpan input) {
 
     double start_time = get_time_seconds();
 
-    // Decompress blocks
-    std::vector<Byte> output;
-    output.reserve(header.original_size);
+    // Parse the block table first so blocks can be decoded in parallel.
+    // Every block needs at least a header, which bounds block_count by input size
+    if (header.block_count > (input.size() - sizeof(FileHeader)) / sizeof(BlockHeader)) {
+        result.error = ErrorCode::CorruptedData;
+        return {{}, result};
+    }
 
-    BlockDecompressor block_decompressor;
+    struct BlockRef {
+        ByteSpan data;
+        uint32_t original_size;
+        Preprocessor preprocessor;
+        CompressionMethod method;
+    };
+    std::vector<BlockRef> blocks;
+    blocks.reserve(header.block_count);
+    size_t total_size = 0;
+    bool has_cm = false;
     size_t offset = sizeof(FileHeader);
 
     for (uint32_t i = 0; i < header.block_count; ++i) {
-        // Read block header
         BlockHeader block_header;
         if (!read_block_header(input, offset, block_header)) {
             result.error = ErrorCode::CorruptedData;
@@ -350,37 +344,73 @@ Decompressor::decompress(ByteSpan input) {
         offset += sizeof(BlockHeader);
 
         uint32_t compressed_size = read_uint24(block_header.compressed_size);
-        uint32_t original_size = read_uint24(block_header.original_size);
-        auto preprocessor = static_cast<Preprocessor>(block_header.preprocessor);
-        auto method = static_cast<CompressionMethod>(block_header.level);
-
-        // Read compressed block data
         if (offset + compressed_size > input.size()) {
             result.error = ErrorCode::CorruptedData;
             return {{}, result};
         }
 
-        ByteSpan block_data(input.data() + offset, compressed_size);
+        BlockRef block{
+            ByteSpan(input.data() + offset, compressed_size),
+            read_uint24(block_header.original_size),
+            static_cast<Preprocessor>(block_header.preprocessor),
+            static_cast<CompressionMethod>(block_header.level)
+        };
         offset += compressed_size;
+        total_size += block.original_size;
+        has_cm = has_cm || block.method == CompressionMethod::CM;
+        blocks.push_back(block);
+    }
 
-        // Decompress block
-        auto decompressed = block_decompressor.decompress(
-            block_data, method, preprocessor, original_size);
+    if (total_size != header.original_size) {
+        result.error = ErrorCode::CorruptedData;
+        return {{}, result};
+    }
 
-        if (decompressed.size() != original_size) {
+    // Decode blocks; workers take the next free block index
+    std::vector<std::vector<Byte>> decoded(blocks.size());
+    size_t num_threads = options_.threads > 0 ? options_.threads : default_thread_count();
+    if (has_cm) {
+        num_threads = std::min(num_threads, config::CM_MAX_THREADS);
+    }
+    num_threads = std::min(num_threads, blocks.size());
+
+    std::atomic<size_t> next_block{0};
+    auto worker = [&] {
+        BlockDecompressor block_decompressor;
+        for (size_t i = next_block++; i < blocks.size(); i = next_block++) {
+            const auto& block = blocks[i];
+            decoded[i] = block_decompressor.decompress(
+                block.data, block.method, block.preprocessor, block.original_size);
+        }
+    };
+
+    if (num_threads <= 1) {
+        worker();
+    } else {
+        std::vector<std::thread> threads;
+        threads.reserve(num_threads);
+        for (size_t t = 0; t < num_threads; ++t) {
+            threads.emplace_back(worker);
+        }
+        for (auto& thread : threads) {
+            thread.join();
+        }
+    }
+
+    std::vector<Byte> output;
+    output.reserve(total_size);
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        if (decoded[i].size() != blocks[i].original_size) {
             result.error = ErrorCode::CorruptedData;
             return {{}, result};
         }
+        output.insert(output.end(), decoded[i].begin(), decoded[i].end());
+        std::vector<Byte>().swap(decoded[i]);
+    }
 
-        output.insert(output.end(), decompressed.begin(), decompressed.end());
-
-        // Progress callback
-        if (options_.progress) {
-            if (!options_.progress(output.size(), header.original_size)) {
-                result.error = ErrorCode::InternalError;
-                return {{}, result};
-            }
-        }
+    if (options_.progress && !options_.progress(output.size(), header.original_size)) {
+        result.error = ErrorCode::InternalError;
+        return {{}, result};
     }
 
     // Verify CRC

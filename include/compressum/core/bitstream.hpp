@@ -172,6 +172,7 @@ public:
         uint64_t value = buffer_ >> (64 - count);
         buffer_ <<= count;
         bit_count_ -= count;
+        consumed_ += count;
 
         return value;
     }
@@ -231,11 +232,14 @@ public:
         while (count > 0) {
             if (bit_count_ < count) {
                 count -= bit_count_;
+                consumed_ += bit_count_;
                 bit_count_ = 0;
+                buffer_ = 0;
                 refill();
             } else {
                 buffer_ <<= count;
                 bit_count_ -= count;
+                consumed_ += count;
                 count = 0;
             }
         }
@@ -249,6 +253,7 @@ public:
         if (skip > 0) {
             buffer_ <<= skip;
             bit_count_ -= skip;
+            consumed_ += skip;
         }
     }
 
@@ -256,21 +261,21 @@ public:
      * Get current bit position in stream
      */
     [[nodiscard]] size_t bit_position() const {
-        return pos_ * 8 - bit_count_;
+        return consumed_;
     }
 
     /**
      * Check if end of stream reached
      */
     [[nodiscard]] bool eof() const {
-        return pos_ >= size_ && bit_count_ == 0;
+        return consumed_ >= size_ * 8;
     }
 
     /**
      * Get remaining bytes (approximate)
      */
     [[nodiscard]] size_t remaining_bytes() const {
-        return (size_ - pos_) + (bit_count_ / 8);
+        return consumed_ < size_ * 8 ? (size_ * 8 - consumed_) / 8 : 0;
     }
 
 private:
@@ -278,8 +283,12 @@ private:
      * Refill buffer from input
      */
     void refill() {
-        while (bit_count_ <= 56 && pos_ < size_) {
-            buffer_ |= static_cast<uint64_t>(data_[pos_++]) << (56 - bit_count_);
+        // Past the end the stream reads as zero bits, so truncated or corrupt
+        // input can never stall a decoder; callers detect it via eof() or CRC
+        while (bit_count_ <= 56) {
+            if (pos_ < size_) {
+                buffer_ |= static_cast<uint64_t>(data_[pos_++]) << (56 - bit_count_);
+            }
             bit_count_ += 8;
         }
     }
@@ -289,6 +298,7 @@ private:
     size_t pos_;
     uint64_t buffer_;
     size_t bit_count_;
+    size_t consumed_ = 0;
 };
 
 } // namespace compressum::core

@@ -69,7 +69,7 @@ struct CompressResult {
     size_t original_size = 0;
     size_t compressed_size = 0;
     uint32_t crc32 = 0;
-    double ratio = 0.0;
+    double ratio = 0.0;            // original_size / compressed_size (e.g. 3.5 = "3.5x")
     double speed_mbps = 0.0;
 
     [[nodiscard]] bool ok() const { return error == ErrorCode::Ok; }

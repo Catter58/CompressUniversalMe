@@ -395,6 +395,17 @@ private:
             }
         }
 
+        // Over-subscribed lengths (corrupt input) cannot form a prefix code:
+        // leave the decoder empty so every decode returns symbol 0
+        sym_count_ = 0;
+        uint64_t kraft = 0;
+        for (size_t bits = 1; bits <= HUFFMAN_MAX_CODE_LEN; ++bits) {
+            kraft += static_cast<uint64_t>(bl_count[bits]) << (HUFFMAN_MAX_CODE_LEN - bits);
+        }
+        if (kraft > (uint64_t{1} << HUFFMAN_MAX_CODE_LEN)) {
+            return;
+        }
+
         // Find starting code for each length
         std::array<uint16_t, HUFFMAN_MAX_CODE_LEN + 1> next_code{};
         uint16_t code = 0;
@@ -404,7 +415,6 @@ private:
         }
 
         // Build symbols and codes arrays for slow decode
-        sym_count_ = 0;
         for (size_t i = 0; i < num_symbols_; ++i) {
             uint8_t len = lengths_[i];
             if (len > 0) {

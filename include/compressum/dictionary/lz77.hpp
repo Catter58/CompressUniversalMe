@@ -284,6 +284,9 @@ public:
                 uint16_t length = decode_length(reader);
                 uint16_t distance = decode_distance(reader);
 
+                if (distance == 0 || distance > output.size()) {
+                    break;  // Corrupt stream: distance outside produced data
+                }
                 size_t copy_pos = output.size() - distance;
                 for (uint16_t i = 0; i < length; ++i) {
                     output.push_back(output[copy_pos + i]);

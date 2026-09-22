@@ -11,6 +11,7 @@
 #include <cassert>
 #include <cstring>
 #include <random>
+#include <string>
 #include <limits>
 
 using namespace compressum;
@@ -243,9 +244,100 @@ TEST(truncated_header) {
     assert(!Decompressor::validate_header(short_data));
 }
 
-// NOTE: truncated_data, corrupted_data, and zero_original_size_in_header tests
-// are disabled because the decompressor may hang on malformed input.
-// TODO: Fix decompressor to handle malformed data with proper timeout/bounds checking.
+TEST(truncated_data) {
+    std::vector<Byte> original(1000, 'X');
+    Compressor c;
+    auto [compressed, comp_result] = c.compress(original);
+    assert(comp_result.ok());
+
+    std::vector<Byte> truncated(compressed.begin(), compressed.begin() + compressed.size() / 2);
+
+    Decompressor d;
+    auto [decompressed, result] = d.decompress(truncated);
+    assert(!result.ok());
+}
+
+TEST(corrupted_data) {
+    std::vector<Byte> original(1000, 'X');
+    Compressor c;
+    auto [compressed, comp_result] = c.compress(original);
+    assert(comp_result.ok());
+
+    if (compressed.size() > 50) {
+        compressed[40] ^= 0xFF;
+        compressed[41] ^= 0xFF;
+        compressed[42] ^= 0xFF;
+    }
+
+    Decompressor d;
+    auto [decompressed, result] = d.decompress(compressed);
+    assert(!result.ok());
+}
+
+TEST(zero_original_size_in_header) {
+    // Valid-looking header with size 0 but garbage after it
+    std::vector<Byte> bad_header = {
+        'C', 'U', 'M', 0x01,
+        0x01, 0x00,
+        0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Original size = 0
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0xDE, 0xAD, 0xBE, 0xEF
+    };
+
+    Decompressor d;
+    auto [decompressed, result] = d.decompress(bad_header);
+    assert(decompressed.empty());
+}
+
+TEST(huge_sizes_in_header) {
+    // Claims 2^60 bytes and 2^32-1 blocks: must be rejected, not allocated
+    std::vector<Byte> bad_header = {
+        'C', 'U', 'M', 0x01,
+        0x02, 0x00,
+        0x09, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0xFF, 0xFF, 0xFF, 0xFF,
+        0xDE, 0xAD, 0xBE, 0xEF
+    };
+
+    Decompressor d;
+    auto [decompressed, result] = d.decompress(bad_header);
+    assert(!result.ok());
+}
+
+// Random corruption of real files: must never crash, hang or return wrong data
+TEST(random_mutations_never_silently_corrupt) {
+    std::mt19937 rng(7);
+    std::string text;
+    const char* words[] = {"alpha ", "beta ", "gamma ", "delta\n", "{\"k\":1}", "\x01\x02\xff"};
+    while (text.size() < 3000) text += words[rng() % 6];
+    std::vector<Byte> original(text.begin(), text.end());
+
+    for (Level level : {Level::Fast, Level::Normal, Level::Best}) {
+        CompressOptions options;
+        options.level = level;
+        options.block_size = 1024;
+        auto [compressed, comp_result] = Compressor(options).compress(original);
+        assert(comp_result.ok());
+
+        for (int i = 0; i < 150; ++i) {
+            auto mutated = compressed;
+            if (i % 3 == 0) {
+                mutated.resize(rng() % mutated.size());
+            } else {
+                mutated[rng() % mutated.size()] ^= static_cast<Byte>(1 + rng() % 255);
+            }
+            auto [decompressed, result] = Decompressor().decompress(mutated);
+            assert(!result.ok() || decompressed == original);
+        }
+    }
+}
+
 
 // ============================================================================
 // Size Boundary Tests
@@ -411,10 +503,14 @@ int main() {
     RUN_TEST(repeated_pattern_long);
     RUN_TEST(run_length_sequences);
 
-    // Malformed input (header validation only - decompression tests disabled)
+    // Malformed input
     RUN_TEST(invalid_magic);
     RUN_TEST(truncated_header);
-    // truncated_data, corrupted_data, zero_original_size_in_header disabled (see TODO above)
+    RUN_TEST(truncated_data);
+    RUN_TEST(corrupted_data);
+    RUN_TEST(zero_original_size_in_header);
+    RUN_TEST(huge_sizes_in_header);
+    RUN_TEST(random_mutations_never_silently_corrupt);
 
     // Size boundaries
     RUN_TEST(size_just_under_block);
